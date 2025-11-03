@@ -2,12 +2,15 @@ package client
 
 import (
 	"bytes"
-	"github.com/wpnpeiris/nats-s3/internal/logging"
-	"github.com/wpnpeiris/nats-s3/internal/testutil"
+	"context"
 	"testing"
 	"time"
 
 	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
+
+	"github.com/wpnpeiris/nats-s3/internal/logging"
+	"github.com/wpnpeiris/nats-s3/internal/testutil"
 )
 
 func TestNatsObjectClient_BasicCRUD(t *testing.T) {
@@ -16,7 +19,7 @@ func TestNatsObjectClient_BasicCRUD(t *testing.T) {
 
 	url := s.ClientURL()
 
-	c := NewClient("object-test")
+	c := NewClient(context.Background(), "object-test")
 	if err := c.SetupConnectionToNATS(url); err != nil {
 		t.Fatalf("connect failed: %v", err)
 	}
@@ -25,28 +28,25 @@ func TestNatsObjectClient_BasicCRUD(t *testing.T) {
 	nc.SetClosedHandler(func(_ *nats.Conn) {})
 	defer nc.Close()
 
-	js, err := nc.JetStream()
-	if err != nil {
-		t.Fatalf("JetStream failed: %v", err)
-	}
+	js := c.JetStream()
 
 	bucket := "testbucket"
 	key := "path/to/object.txt"
 	data := []byte("hello world")
 
 	// Create the bucket for object store operations.
-	if _, err := js.CreateObjectStore(&nats.ObjectStoreConfig{Bucket: bucket}); err != nil {
+	if _, err := js.CreateObjectStore(c.ctx, jetstream.ObjectStoreConfig{Bucket: bucket}); err != nil {
 		t.Fatalf("create object store failed: %v", err)
 	}
 
 	logger := logging.NewLogger(logging.Config{Level: "debug"})
-	oc, err := NewNatsObjectClient(logger, c)
+	oc, err := NewNatsObjectClient(context.Background(), logger, c, NatsObjectClientOptions{})
 	if err != nil {
 		t.Fatalf("NewNatsObjectClient failed: %v", err)
 	}
 
 	// Put
-	info, err := oc.PutObject(bucket, key, "text/plain", map[string]string{"k": "v"}, data)
+	info, err := oc.PutObject(c.ctx, bucket, key, "text/plain", map[string]string{"k": "v"}, data)
 	if err != nil {
 		t.Fatalf("PutObject failed: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestNatsObjectClient_BasicCRUD(t *testing.T) {
 	}
 
 	// GetInfo
-	gi, err := oc.GetObjectInfo(bucket, key)
+	gi, err := oc.GetObjectInfo(c.ctx, bucket, key)
 	if err != nil {
 		t.Fatalf("GetObjectInfo failed: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestNatsObjectClient_BasicCRUD(t *testing.T) {
 	}
 
 	// Get
-	gotInfo, gotData, err := oc.GetObject(bucket, key)
+	gotInfo, gotData, err := oc.GetObject(c.ctx, bucket, key)
 	if err != nil {
 		t.Fatalf("GetObject failed: %v", err)
 	}
@@ -76,7 +76,7 @@ func TestNatsObjectClient_BasicCRUD(t *testing.T) {
 	}
 
 	// ListObjects should include our key
-	list, err := oc.ListObjects(bucket)
+	list, err := oc.ListObjects(c.ctx, bucket)
 	if err != nil {
 		t.Fatalf("ListObjects failed: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestNatsObjectClient_BasicCRUD(t *testing.T) {
 	}
 
 	// ListBuckets channel should yield our bucket
-	ch, err := oc.ListBuckets()
+	ch, err := oc.ListBuckets(c.ctx)
 	if err != nil {
 		t.Fatalf("ListBuckets failed: %v", err)
 	}
@@ -117,12 +117,12 @@ func TestNatsObjectClient_BasicCRUD(t *testing.T) {
 
 delete:
 	// Delete
-	if err := oc.DeleteObject(bucket, key); err != nil {
+	if err := oc.DeleteObject(c.ctx, bucket, key); err != nil {
 		t.Fatalf("DeleteObject failed: %v", err)
 	}
 
 	// Verify deletion by attempting GetObjectInfo and expecting error
-	if _, err := oc.GetObjectInfo(bucket, key); err == nil {
+	if _, err := oc.GetObjectInfo(c.ctx, bucket, key); err == nil {
 		t.Fatalf("expected error getting deleted object info")
 	}
 }
